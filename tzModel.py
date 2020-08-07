@@ -1,7 +1,9 @@
 import numpy as np
 import pickle
 import torch.nn as nn
+import torch
 from torch import optim
+from torch import from_numpy
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
 import random
@@ -118,6 +120,37 @@ class seq2seq(nn.Module):
         
         return outputs
 
+class Model_LSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim,batch_size=4,num_layers=2):
+        super(Model_LSTM, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
+        #self.lstm = nn.LSTM(self.input_dim, self.hidden_dim,num_layers=self.num_layers,dropout=0.5,batch_first=True)
+        self.lstm = nn.LSTM(input_size=self.input_dim,hidden_size=self.hidden_dim,num_layers=self.num_layers,batch_first=True)
+        self.fc = nn.Linear(self.hidden_dim, self.output_dim)
+        self.softmax = nn.Softmax(dim=1)
+        #self.h0 = np.random.normal(mean,std,(input_units+hidden_units,hidden_units))
+    def forward(self, x):
+         # Initialize hidden state with zeros
+         #self.layer_dim, batch_dim, self.hidden_dim
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim,dtype=torch.double).requires_grad_()
+        # Initialize cell state
+        #self.layer_dim, x.size(0), self.hidden_dim
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim,dtype=torch.double).requires_grad_()
+        # We need to detach as we are doing truncated backpropagation through time (BPTT)
+        # If we don't, we'll backprop all the way to the start even after going through another batch
+        #out, (hn, cn) = self.lstm(x, (h0.detach(), c0.detach()))
+        out, (hn, cn) = self.lstm(x, (h0, c0) )
+        batch_first = out.transpose(0,1)
+        batch_size = x.shape[0]
+        linear_input = batch_first.view(-1,self.hidden_dim)
+        out = self.fc(linear_input)
+        out_softmax = self.softmax(out)
+        return out_softmax, (hn, cn)
+
+
 songs_data = create_data()
 # # of songs (samples) x # of timestamps x tuple of 4 (combination of notes
 # and rhythms of both hands)
@@ -130,6 +163,7 @@ HIDDEN = 256
 vocab_size = len(data_to_int)
 OUTPUT = vocab_size
 BATCH_SIZE = 2
+SEQ_LEN = 200
 #LEARNING_RATE = 0.005
 #BETA1 = 0.9
 #BETA2 = 0.999
@@ -138,34 +172,57 @@ BATCH_SIZE = 2
 # get batched dataset
 def get_batches(songs, data_int):
     train_dataset = []
-    for i in range(len(songs) - BATCH_SIZE + 1):
-        start = i * BATCH_SIZE
-        end = start + BATCH_SIZE
-        batch_data = songs[start:end]
-        if(len(batch_data) != BATCH_SIZE):
-            break
-        note_list = []
-        for j in range(len(batch_data[0])):
-            batch_dataset = np.zeros([BATCH_SIZE, len(data_int)])
-            for k in range(BATCH_SIZE):
-                note = batch_data[k][j]
+    batch_size = min(int(len(songs[0])/SEQ_LEN),16) #max batch size is 16
+    song_len = len(songs[0])    #all songs have the same length
+    for song in songs:
+        batched_song = np.zeros([batch_size,SEQ_LEN,vocab_size],dtype=np.double)
+        for batch_idx,seq_idx in enumerate(range(0,song_len,SEQ_LEN)):
+            if batch_idx == batch_size:
+                train_dataset.append(batched_song)
+            start = seq_idx
+            end = start + SEQ_LEN
+            if end+1 >= len(song):
+                break
+            sequence = song[start:end]
+            #batched_song[batch_idx,:] = single_sequence
+            #if(len(batch_data) != batch_size):
+            #    break
+            note_list = []
+            #one_hot_note = np.zeros([batch_size, len(data_int)])
+            for i,note in enumerate(sequence):
                 idx = data_to_int[note]
-                batch_dataset[k, idx] = 1
-            note_list.append(batch_dataset)
-        train_dataset.append(note_list)
-    return train_dataset
+                batched_song[batch_idx,i,idx] = 1
+        
+    return train_dataset,batch_size
+def prepareData(data,seq_len=SEQ_LEN):
+    X = []
+    Y = []
+    
+    for i,batch in enumerate(data):
+        x_temp = np.copy(batch[:,:-1,:])
+        y_temp = np.copy(batch[:,1:,:])
+        X.append(x_temp)
+        Y.append(y_temp)
+    return X,Y
 def main():
     train_set = get_batches(songs_data, data_to_int)
-
-    encoder = EncoderLSTM(219, 512)
-    decoder = DecoderLSTM(512, 219)
+    X,Y = prepareData(train_set)
+    total_idx = np.random.permutation( len(X) )
+    rand_idx = total_idx[0:int(len(total_idx)*0.75)]
+    rand_idx2 = total_idx[int(len(total_idx)*0.75):int(len(total_idx))]
+    train_x = [from_numpy(X[i]) for i in rand_idx]
+    train_y = [from_numpy(Y[i]) for i in rand_idx]
+    eval_x = [from_numpy(X[i]) for i in rand_idx2]
+    eval_y = [from_numpy(Y[i]) for i in rand_idx2]
+    #dont need X,Y anymore
+    X = None
+    Y = None
     
-    encoder.to(device)
-    decoder.to(device)
+    model = Model_LSTM(vocab_size,hidden_dim=HIDDEN,output_dim=OUTPUT)
+    model.double()
+    #s2s = seq2seq(encoder, decoder, device).to(device)
     
-    s2s = seq2seq(encoder, decoder, device).to(device)
-    
-    optimizer = optim.Adam(s2s.parameters(), lr = 1e-5)
+    optimizer = optim.Adam(model.parameters(), lr = 1e-5)
     
     criterion = nn.BCELoss()
     
@@ -178,15 +235,17 @@ def main():
     for epoch in range(num_epochs):
         
         #TRAINING
-        s2s.train()
+        model.train()
         epoch_tr_loss = 0
+        accuracy = 0
         for i in range(len(train_x)): 
             optimizer.zero_grad()
-            output = s2s(train_x[i], train_y[i])
-            loss = criterion(output[1:101], train_y[i][1:101])
-            
+            output, (hn, cn) = model(train_x[i])
+            output = output.view(4,SEQ_LEN-1,-1)    #batch_size=4
+            loss = criterion(output[:], train_y[i][:])
+            o = np.argmax(output.detach(),axis=2)
             loss.backward()
-            clip_grad_norm_(s2s.parameters(), .25)
+            #clip_grad_norm_(model.parameters(), .25)
             
             optimizer.step()
             
@@ -197,12 +256,12 @@ def main():
             
             
         #Eval
-        s2s.eval()
+        model.eval()
         epoch_ev_loss = 0
         for i in range(len(eval_x)): 
-            output = s2s(eval_x[i], eval_y[i], 0)
-            
-            loss = criterion(output[1:101], eval_y[i][1:101])
+            output, (hn, cn) = model(eval_x[i])
+            output = output.view(4,SEQ_LEN-1,-1)    #batch_size=4
+            loss = criterion(output[:], eval_y[i][:])
             
             epoch_ev_loss += loss.item()
             
@@ -217,48 +276,6 @@ def main():
         print('The current training loss is ', epoch_tr_loss, " ", epoch_tr_loss/len(train_x))
         print('The current test loss is ', epoch_ev_loss, " ", epoch_ev_loss/len(eval_x))
         print()
-        
-        #Testing
-        if epoch % 50 == 0:
-            s2s.eval()
-            epoch_tt_loss = 0
-            for i in range(len(test_x)):
-                output = s2s(test_x[i], test_y[i], 0)
-            
-                loss = criterion(output[1:101], test_y[i][1:101])
-                
-                epoch_tt_loss += loss.item()
-                
-                if i % 100 == 0:
-                    print("Evaluation iteration ", i, " out of ", len(test_x))
-                    
-            tt_loss_list.append(epoch_tt_loss/len(test_x))
-            
-            with open('test_loss.pkl', 'wb') as handle:
-                pickle.dump(tt_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
-        
-        if epoch % 15 == 0:
-            
-            state = {
-                    'epoch': epoch,
-                    'enc_state_dict': encoder.state_dict(),
-                    'dec_state_dict': decoder.state_dict(),
-                    's2s_state_dict': s2s.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-            }
-            
-            
-            torch.save(state, str(epoch)+'modelstate.pth')
-            
-            with open('train_loss.pkl', 'wb') as handle:
-                pickle.dump(tr_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
-    
-            with open('eval_loss.pkl', 'wb') as handle:
-                pickle.dump(ev_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
-    
-
-
-
 main()
 
 
