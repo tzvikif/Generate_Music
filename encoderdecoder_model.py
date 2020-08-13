@@ -83,7 +83,7 @@ if __name__ == "__main__":
     
     print('Newest version 12/7/18 7:00 PM')
     
-    with open(CURRENT_PATH + 'classical_notes.pkl', 'rb') as handle:
+    with open(CURRENT_PATH + '../../Meta/'+'classical_notes.pkl', 'rb') as handle:
         data = pickle.load(handle)
         
     #If GPU
@@ -96,8 +96,8 @@ if __name__ == "__main__":
             one_big_file.append(note)
     
     #Trim off a bit of the data, so it's a nice number
-    one_big_file = one_big_file[0:406800]
-    
+    #one_big_file = one_big_file[0:406800]
+    one_big_file = one_big_file[0:1900]
     
     #Organize data into one giant vector
     dataset = torch.stack(one_big_file, dim = 0).to(device)
@@ -158,7 +158,7 @@ if __name__ == "__main__":
     
     criterion = nn.BCELoss()
     
-    num_epochs = 200
+    num_epochs = 50
     
     tr_loss_list = []
     ev_loss_list = []
@@ -181,7 +181,7 @@ if __name__ == "__main__":
             
             epoch_tr_loss += loss.item()
             
-            if i % 100 == 0:
+            if i % 1 == 0:
                 print("Training iteration ", i, " out of ", len(train_x))
             
             
