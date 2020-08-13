@@ -12,12 +12,14 @@ from torch import optim
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
 import random
+import matplotlib.pyplot as plt
 
 #########################################################MODELS###########################################################
 
 #Input is 100x1x219
 #100 is the batch size
 #219 is the length of the vector for each note
+HIDDEN = 100
 CURRENT_PATH = '/Users/tzvikif/Documents/Msc/Deep Learning/Project/MID/Bach/'
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -77,6 +79,21 @@ class seq2seq(nn.Module):
             input = (trg[t] if teacher_force else output)
         
         return outputs
+def myPlot(train_losses,test_losses):
+    fig = plt.figure()
+    plt.plot(range(1,len(train_losses)+1), train_losses, color='blue')
+    plt.scatter(range(1,len(test_losses)+1), test_losses, color='red')
+    plt.legend(['Train Loss', 'Test Loss'], loc='upper right')
+    plt.xlabel('#Epochs')
+    plt.ylabel('Loss')
+    plt.show()
+'''
+with open(CURRENT_PATH + '../'+'eval_loss2.pkl', 'rb') as handle:
+    eval_loss = pickle.load(handle)
+with open(CURRENT_PATH + '../'+'train_loss2.pkl', 'rb') as handle:
+    train_loss = pickle.load(handle)
+myPlot(train_loss,eval_loss)
+'''
 
 ####################################################SETTING UP DATA#########################################################
 if __name__ == "__main__":
@@ -85,6 +102,7 @@ if __name__ == "__main__":
     
     with open(CURRENT_PATH + '../../Meta/'+'classical_notes.pkl', 'rb') as handle:
         data = pickle.load(handle)
+
         
     #If GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,8 +164,8 @@ if __name__ == "__main__":
     
     #########################################################TRAINING###########################################################
     
-    encoder = EncoderRNN(219, 512)
-    decoder = DecoderRNN(512, 219)
+    encoder = EncoderRNN(219, HIDDEN)
+    decoder = DecoderRNN(HIDDEN, 219)
     
     encoder.to(device)
     decoder.to(device)
@@ -208,6 +226,7 @@ if __name__ == "__main__":
         print()
         
         #Testing
+        '''
         if epoch % 50 == 0:
             s2s.eval()
             epoch_tt_loss = 0
@@ -225,26 +244,27 @@ if __name__ == "__main__":
             
             with open('test_loss.pkl', 'wb') as handle:
                 pickle.dump(tt_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
+        '''
+        #if epoch % 15 == 0:
+            
+        state = {
+                'epoch': epoch,
+                'enc_state_dict': encoder.state_dict(),
+                'dec_state_dict': decoder.state_dict(),
+                's2s_state_dict': s2s.state_dict(),
+                'optimizer': optimizer.state_dict(),
+        }
         
-        if epoch % 15 == 0:
-            
-            state = {
-                    'epoch': epoch,
-                    'enc_state_dict': encoder.state_dict(),
-                    'dec_state_dict': decoder.state_dict(),
-                    's2s_state_dict': s2s.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-            }
-            
-            
-            torch.save(state, str(epoch)+'modelstate.pth')
-            
-            with open('train_loss.pkl', 'wb') as handle:
-                pickle.dump(tr_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
+        
+    torch.save(state, CURRENT_PATH+ '/tz_modelstate2.pth')
     
-            with open('eval_loss.pkl', 'wb') as handle:
-                pickle.dump(ev_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
+    with open(CURRENT_PATH + '../'+'train_loss2.pkl', 'wb') as handle:
+        pickle.dump(tr_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
+
+    with open(CURRENT_PATH + '../'+'eval_loss2.pkl', 'wb') as handle:
+        pickle.dump(ev_loss_list, handle, protocol= pickle.HIGHEST_PROTOCOL )
     
-            #state = torch.load(filepath)
-            #s2s.load_state_dict(state['state_dict'])
-            #optimizer.load_state_dict(state['optimizer'])
+    #myPlot(tr_loss_list,ev_loss_list)
+    #state = torch.load(filepath)
+    #s2s.load_state_dict(state['state_dict'])
+    #optimizer.load_state_dict(state['optimizer'])
